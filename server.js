@@ -9,7 +9,6 @@ const { Expo } = require('expo-server-sdk');
 const expo = new Expo();
 
 const app = express();
-// 🟢 จุดที่ 1: ปรับ Port ให้รองรับ Environment Variable บน Render
 const port = process.env.PORT || 3000;
 
 app.use(cors());
@@ -27,20 +26,19 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-// 🟢 จุดที่ 2: ปรับการเชื่อมต่อ Database ให้ใช้กับ TiDB Cloud
 const db = mysql.createPool({
-  host: process.env.DB_HOST || 'gateway01.ap-southeast-1.prod.aws.tidbcloud.com', // ค่า Host TiDB
-  port: process.env.DB_PORT || 4000,                                             // Port TiDB คือ 4000
-  user: process.env.DB_USER || 'BJGnErUr2BJSKDf.root',                       // เช่น xxxxx.root
-  password: process.env.DB_PASSWORD || 'MooR2wlhLmTkOC1k',                   // รหัสผ่าน TiDB
-  database: process.env.DB_NAME || 'test',                                       // ชื่อฐานข้อมูลบน TiDB (test)
+  host: process.env.DB_HOST || 'gateway01.ap-southeast-1.prod.aws.tidbcloud.com', 
+  port: process.env.DB_PORT || 4000,                                             
+  user: process.env.DB_USER || 'BJGnErUr2BJSKDf.root',                       
+  password: process.env.DB_PASSWORD || 'MooR2wlhLmTkOC1k',                   
+  database: process.env.DB_NAME || 'test',                                      
   dateStrings: true, 
   timezone: '+07:00',
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
   ssl: {
-    rejectUnauthorized: false                                                    // **สำคัญมาก** บังคับใช้ SSL เชื่อมคลาวด์
+    rejectUnauthorized: false                                                    
   }
 });
 
@@ -167,7 +165,7 @@ app.put('/activities/:id', (req, res) => {
   const query = `
     UPDATE activities 
     SET title = ?, activity_date = ?, start_time = ?, location = ?, type_id = ?, reminder_minutes = ?,
-        status = COALESCE(?, status)
+        status = COALESCE(?, status), is_notified = 0
     WHERE activity_id = ?
   `;
 
@@ -495,10 +493,11 @@ cron.schedule('* * * * *', () => {
     FROM activities a
     JOIN users u ON a.user_id = u.user_id
     WHERE a.is_notified = 0 
+      AND a.status = 'pending'
       AND u.push_token IS NOT NULL 
       AND u.push_token != ''
-      AND TIMESTAMP(a.activity_date, a.start_time) - INTERVAL COALESCE(a.reminder_minutes, 0) MINUTE <= NOW()
-      AND TIMESTAMP(a.activity_date, a.start_time) >= NOW() - INTERVAL 1 DAY
+      AND TIMESTAMP(a.activity_date, a.start_time) - INTERVAL COALESCE(a.reminder_minutes, 0) MINUTE <= (NOW() + INTERVAL 7 HOUR)
+      AND TIMESTAMP(a.activity_date, a.start_time) >= (NOW() + INTERVAL 7 HOUR) - INTERVAL 1 DAY
   `;
 
   db.query(sql, async (err, results) => {
@@ -506,6 +505,10 @@ cron.schedule('* * * * *', () => {
       console.error('❌ เกิดข้อผิดพลาดในการตรวจสอบเวลาแจ้งเตือน:', err);
       return;
     }
+
+    // 🟢 แสดง Log การทำงานทุกนาที
+    const currentTime = new Date().toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok' });
+    console.log(`⏰ [${currentTime}] เช็กเวลาแจ้งเตือน: พบ ${results.length} รายการที่ต้องยิง Push`);
 
     if (results.length === 0) return;
 
