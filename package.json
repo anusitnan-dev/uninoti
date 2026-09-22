@@ -12,9 +12,11 @@
   "license": "ISC",
   "dependencies": {
     "cors": "^2.8.6",
+    "dotenv": "^18.0.2",
     "expo-server-sdk": "^7.2.0",
     "express": "^5.2.1",
-    "mysql2": "^3.22.3",
+    "multer": "^2.4.0",
+    "mysql2": "^3.24.4",
     "node-cron": "^4.6.0"
   }
 }
