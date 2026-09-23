@@ -488,16 +488,18 @@ app.post('/academic-years', (req, res) => {
 });
 
 cron.schedule('* * * * *', () => {
+  const currentTime = new Date().toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok' });
+  console.log(`⏰ [${currentTime}] Cron ตื่นมาทำงาน: กำลังเช็กฐานข้อมูล...`);
   const sql = `
     SELECT a.activity_id, a.title, a.location, u.push_token
     FROM activities a
-    JOIN users u ON a.user_id = u.user_id
+    LEFT JOIN users u ON a.user_id = u.user_id
     WHERE a.is_notified = 0 
       AND a.status = 'pending'
       AND u.push_token IS NOT NULL 
       AND u.push_token != ''
-      AND TIMESTAMP(a.activity_date, a.start_time) - INTERVAL COALESCE(a.reminder_minutes, 0) MINUTE <= (NOW() + INTERVAL 7 HOUR)
-      AND TIMESTAMP(a.activity_date, a.start_time) >= (NOW() + INTERVAL 7 HOUR) - INTERVAL 1 DAY
+      AND TIMESTAMP(a.activity_date, a.start_time) - INTERVAL COALESCE(a.reminder_minutes, 0) MINUTE <= NOW()
+      AND TIMESTAMP(a.activity_date, a.start_time) >= NOW() - INTERVAL 1 DAY
   `;
 
   db.query(sql, async (err, results) => {
@@ -506,9 +508,7 @@ cron.schedule('* * * * *', () => {
       return;
     }
 
-    // 🟢 แสดง Log การทำงานทุกนาที
-    const currentTime = new Date().toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok' });
-    console.log(`⏰ [${currentTime}] เช็กเวลาแจ้งเตือน: พบ ${results.length} รายการที่ต้องยิง Push`);
+    console.log(`🔎 [${currentTime}] ผลการตรวจสอบ: พบ ${results.length} รายการที่ต้องยิง Push`);
 
     if (results.length === 0) return;
 
@@ -524,7 +524,7 @@ cron.schedule('* * * * *', () => {
       messages.push({
         to: item.push_token,
         sound: 'default',
-        title: '🔔 แจ้งเตือนกิจกรรม',
+        title: 'แจ้งเตือนกิจกรรม',
         body: `อีกไม่นานจะถึงเวลา: ${item.title}${item.location ? ` ที่ ${item.location}` : ''}`,
         data: { activityId: item.activity_id },
       });
