@@ -529,6 +529,7 @@ cron.schedule('* * * * *', () => {
         title: 'แจ้งเตือนกิจกรรม',
         body: `อีกไม่นานจะถึงเวลา: ${item.title}${item.location ? ` ที่ ${item.location}` : ''}`,
         data: { activityId: item.activity_id },
+        channelId: 'default',
       });
 
       activityIds.push(item.activity_id);
