@@ -490,6 +490,8 @@ app.post('/academic-years', (req, res) => {
 cron.schedule('* * * * *', () => {
   const currentTime = new Date().toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok' });
   console.log(`⏰ [${currentTime}] Cron ตื่นมาทำงาน: กำลังเช็กฐานข้อมูล...`);
+
+  // ใช้ DATE_ADD(NOW(), INTERVAL 7 HOUR) ปรับเวลา UTC ให้เป็นเวลาไทย (+7)
   const sql = `
     SELECT a.activity_id, a.title, a.location, u.push_token
     FROM activities a
@@ -498,8 +500,8 @@ cron.schedule('* * * * *', () => {
       AND a.status = 'pending'
       AND u.push_token IS NOT NULL 
       AND u.push_token != ''
-      AND TIMESTAMP(a.activity_date, a.start_time) - INTERVAL COALESCE(a.reminder_minutes, 0) MINUTE <= NOW()
-      AND TIMESTAMP(a.activity_date, a.start_time) >= NOW() - INTERVAL 1 DAY
+      AND TIMESTAMP(a.activity_date, a.start_time) - INTERVAL COALESCE(a.reminder_minutes, 0) MINUTE <= DATE_ADD(NOW(), INTERVAL 7 HOUR)
+      AND TIMESTAMP(a.activity_date, a.start_time) >= DATE_ADD(NOW(), INTERVAL 7 HOUR) - INTERVAL 1 DAY
   `;
 
   db.query(sql, async (err, results) => {
