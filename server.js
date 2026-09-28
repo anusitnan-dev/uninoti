@@ -320,13 +320,18 @@ app.delete('/activity_types/:id', (req, res) => {
 });
 
 app.get('/subjects', (req, res) => {
-  const { year_id } = req.query;
-  let sql = "SELECT * FROM subjects";
+  const { year_id, semester } = req.query;
+  let sql = "SELECT * FROM subjects WHERE 1=1";
   let params = [];
 
   if (year_id) {
-    sql += " WHERE year_id = ?";
+    sql += " AND year_id = ?";
     params.push(year_id);
+  }
+
+  if (semester) {
+    sql += " AND semester = ?";
+    params.push(semester);
   }
 
   sql += " ORDER BY subject_code ASC, section ASC";
@@ -341,7 +346,7 @@ app.get('/subjects', (req, res) => {
 });
 
 app.post('/subjects', (req, res) => {
-  const { subject_code, subject_name, section, day_of_week, start_time, end_time, room, instructor_name, year_id } = req.body;
+  const { subject_code, subject_name, section, day_of_week, start_time, end_time, room, instructor_name, year_id, semester } = req.body;
   
   if (!subject_code || !subject_name) {
     return res.status(400).json({ error: 'กรุณากรอกรหัสและชื่อวิชาให้ครบถ้วน' });
@@ -349,11 +354,12 @@ app.post('/subjects', (req, res) => {
 
   const sql = `
     INSERT INTO subjects 
-    (subject_code, subject_name, section, day_of_week, start_time, end_time, room, instructor_name, year_id) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (subject_code, subject_name, section, day_of_week, start_time, end_time, room, instructor_name, year_id, semester) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   
-  const values = [subject_code, subject_name, section, day_of_week, start_time || null, end_time || null, room, instructor_name, year_id || null];
+  const values = [subject_code, subject_name, section, day_of_week, start_time || null, end_time || null, room, instructor_name, year_id || null,
+    semester || 'ภาคต้น'];
 
   db.query(sql, values, (err, result) => {
     if (err) {
@@ -366,15 +372,15 @@ app.post('/subjects', (req, res) => {
 
 app.put('/subjects/:id', (req, res) => {
   const { id } = req.params;
-  const { subject_code, subject_name, section, day_of_week, start_time, end_time, room, instructor_name, year_id } = req.body;
+  const { subject_code, subject_name, section, day_of_week, start_time, end_time, room, instructor_name, year_id, semester } = req.body;
 
   const sql = `
     UPDATE subjects 
-    SET subject_code = ?, subject_name = ?, section = ?, day_of_week = ?, start_time = ?, end_time = ?, room = ?, instructor_name = ?, year_id = ?
+    SET subject_code = ?, subject_name = ?, section = ?, day_of_week = ?, start_time = ?, end_time = ?, room = ?, instructor_name = ?, year_id = ?, semester = ?
     WHERE subject_id = ?
   `;
   
-  const values = [subject_code, subject_name, section, day_of_week, start_time || null, end_time || null, room, instructor_name, year_id || null, id];
+  const values = [subject_code, subject_name, section, day_of_week, start_time || null, end_time || null, room, instructor_name, year_id || null, semester || 'ภาคต้น' ,id];
 
   db.query(sql, values, (err, result) => {
     if (err) {
@@ -403,7 +409,11 @@ app.get('/user-subjects', (req, res) => {
   const { email } = req.query;
   const sql = `
     SELECT us.id AS enroll_id, s.subject_id, s.subject_code, s.subject_name, 
-           s.section, s.day_of_week, s.start_time, s.end_time, s.room, s.instructor_name
+           s.section, s.day_of_week, 
+           COALESCE(us.start_time, s.start_time) AS start_time,
+           COALESCE(us.end_time, s.end_time) AS end_time,
+           COALESCE(us.room, s.room) AS room,
+           s.instructor_name
     FROM user_subjects us
     JOIN users u ON us.user_id = u.user_id
     JOIN subjects s ON us.subject_id = s.subject_id
@@ -439,6 +449,25 @@ app.delete('/user-subjects/:id', (req, res) => {
   db.query(sql, [id], (err, result) => {
     if (err) return res.status(500).json({ error: 'ลบข้อมูลไม่สำเร็จ' });
     res.json({ message: 'ลบวิชาออกจากตารางสำเร็จ' });
+  });
+});
+
+app.put('/user-subjects/:id', (req, res) => {
+  const { id } = req.params;
+  const { room, start_time, end_time } = req.body;
+
+  const sql = `
+    UPDATE user_subjects 
+    SET room = ?, start_time = ?, end_time = ?
+    WHERE id = ?
+  `;
+
+  db.query(sql, [room, start_time || null, end_time || null, id], (err, result) => {
+    if (err) {
+      console.error('❌ แก้ไขวิชาไม่สำเร็จ:', err);
+      return res.status(500).json({ error: 'อัปเดตไม่สำเร็จ' });
+    }
+    res.json({ message: 'แก้ไขห้องและเวลาสำเร็จ ✨' });
   });
 });
 
