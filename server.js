@@ -430,16 +430,64 @@ app.get('/user-subjects', (req, res) => {
 
 app.post('/user-subjects', (req, res) => {
   const { email, subject_id } = req.body;
-  const sql = `
-    INSERT INTO user_subjects (user_id, subject_id) 
-    VALUES ((SELECT user_id FROM users WHERE email = ? LIMIT 1), ?)
-  `;
-  db.query(sql, [email, subject_id], (err, result) => {
-    if (err) {
-      console.error('❌ เพิ่มวิชาเข้าตารางไม่สำเร็จ:', err);
-      return res.status(500).json({ error: 'เพิ่มข้อมูลไม่สำเร็จ' });
+
+  if (!email || !subject_id) {
+    return res.status(400).json({ error: 'ข้อมูลไม่ครบถ้วน' });
+  }
+
+  // 1. ดึงข้อมูลวิชาใหม่ที่กำลังจะเพิ่ม
+  const getSubjectSql = `SELECT * FROM subjects WHERE subject_id = ?`;
+  db.query(getSubjectSql, [subject_id], (err, targetSubjects) => {
+    if (err || targetSubjects.length === 0) {
+      return res.status(404).json({ error: 'ไม่พบรายวิชาที่ระบุ' });
     }
-    res.status(201).json({ message: 'เพิ่มวิชาสำเร็จ', enroll_id: result.insertId });
+
+    const newSubject = targetSubjects[0];
+
+    // 2. ดึงวิชาเดิมทั้งหมดของผู้ใช้คนนี้มาตรวจ
+    const getUserSubjectsSql = `
+      SELECT s.subject_id, s.subject_code, s.day_of_week, 
+             COALESCE(us.start_time, s.start_time) AS start_time,
+             COALESCE(us.end_time, s.end_time) AS end_time
+      FROM user_subjects us
+      JOIN users u ON us.user_id = u.user_id
+      JOIN subjects s ON us.subject_id = s.subject_id
+      WHERE u.email = ?
+    `;
+
+    db.query(getUserSubjectsSql, [email], (err, existingSubjects) => {
+      if (err) return res.status(500).json({ error: 'ตรวจสอบข้อมูลตารางเรียนไม่สำเร็จ' });
+
+      // 2.1 ดักวิชาซ้ำ
+      const isDuplicate = existingSubjects.some(item => item.subject_code === newSubject.subject_code);
+      if (isDuplicate) {
+        return res.status(400).json({ error: 'คุณได้เพิ่มรายวิชานี้เข้าตารางไปแล้ว' });
+      }
+
+      // 2.2 ดักเวลาชนกันในวันเดียวกัน (SQL ดึงมาเป็นรูปแบบ HH:mm:ss เปรียบเทียบตรงๆ ใน DB ได้)
+      const hasTimeConflict = existingSubjects.some(item => {
+        if (item.day_of_week !== newSubject.day_of_week) return false;
+        
+        return newSubject.start_time < item.end_time && newSubject.end_time > item.start_time;
+      });
+
+      if (hasTimeConflict) {
+        return res.status(400).json({ error: 'ช่วงเวลาเรียนซ้ำซ้อนกับวิชาที่มีอยู่ในตารางแล้ว' });
+      }
+
+      // 3. ผ่านทุกเงื่อนไข บันทึกลงตาราง user_subjects
+      const insertSql = `
+        INSERT INTO user_subjects (user_id, subject_id) 
+        VALUES ((SELECT user_id FROM users WHERE email = ? LIMIT 1), ?)
+      `;
+      db.query(insertSql, [email, subject_id], (insertErr, result) => {
+        if (insertErr) {
+          console.error('❌ เพิ่มวิชาเข้าตารางไม่สำเร็จ:', insertErr);
+          return res.status(500).json({ error: 'เพิ่มข้อมูลไม่สำเร็จ' });
+        }
+        res.status(201).json({ message: 'เพิ่มวิชาสำเร็จ', enroll_id: result.insertId });
+      });
+    });
   });
 });
 
@@ -520,16 +568,16 @@ cron.schedule('* * * * *', () => {
   const currentTime = new Date().toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok' });
   console.log(`⏰ [${currentTime}] Cron ตื่นมาทำงาน: กำลังเช็กฐานข้อมูล...`);
 
-  // ใช้ DATE_ADD(NOW(), INTERVAL 7 HOUR) ปรับเวลา UTC ให้เป็นเวลาไทย (+7)
   const sql = `
     SELECT a.activity_id, a.title, a.location, u.push_token
     FROM activities a
     LEFT JOIN users u ON a.user_id = u.user_id
     WHERE a.is_notified = 0 
       AND a.status = 'pending'
+      AND a.reminder_minutes IS NOT NULL
       AND u.push_token IS NOT NULL 
       AND u.push_token != ''
-      AND TIMESTAMP(a.activity_date, a.start_time) - INTERVAL COALESCE(a.reminder_minutes, 0) MINUTE <= DATE_ADD(NOW(), INTERVAL 7 HOUR)
+      AND TIMESTAMP(a.activity_date, a.start_time) - INTERVAL a.reminder_minutes MINUTE <= DATE_ADD(NOW(), INTERVAL 7 HOUR)
       AND TIMESTAMP(a.activity_date, a.start_time) >= DATE_ADD(NOW(), INTERVAL 7 HOUR) - INTERVAL 1 DAY
   `;
 
