@@ -55,6 +55,10 @@ app.get('/', (req, res) => {
   res.send('สวัสดี! นี่คือ API ของแอป Uninoti');
 });
 
+/* =========================================================
+   1. ACTIVITIES & USER PROFILE API
+========================================================= */
+
 app.get('/activities', (req, res) => {
   const userEmail = req.query.email; 
   const searchTerm = req.query.search || ''; 
@@ -319,22 +323,32 @@ app.delete('/activity_types/:id', (req, res) => {
   });
 });
 
+/* =========================================================
+   2. SUBJECTS & ACADEMIC YEARS API (ปรับปรุงรองรับวันเปิด-ปิดเทอม)
+========================================================= */
+
+// ดึงรายวิชาสำหรับหน้า ManageSubjects.jsx (รวมข้อมูลวันเปิด-ปิดเทอมของปีการศึกษานั้น)
 app.get('/subjects', (req, res) => {
   const { year_id, semester } = req.query;
-  let sql = "SELECT * FROM subjects WHERE 1=1";
+  let sql = `
+    SELECT s.*, ay.academic_year, ay.semester_start_date, ay.semester_end_date, ay.is_current
+    FROM subjects s
+    LEFT JOIN academic_years ay ON s.year_id = ay.year_id
+    WHERE 1=1
+  `;
   let params = [];
 
   if (year_id) {
-    sql += " AND year_id = ?";
+    sql += " AND s.year_id = ?";
     params.push(year_id);
   }
 
   if (semester) {
-    sql += " AND semester = ?";
+    sql += " AND s.semester = ?";
     params.push(semester);
   }
 
-  sql += " ORDER BY subject_code ASC, section ASC";
+  sql += " ORDER BY s.subject_code ASC, s.section ASC";
   
   db.query(sql, params, (err, results) => {
     if (err) {
@@ -358,8 +372,7 @@ app.post('/subjects', (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   
-  const values = [subject_code, subject_name, section, day_of_week, start_time || null, end_time || null, room, instructor_name, year_id || null,
-    semester || 'ภาคต้น'];
+  const values = [subject_code, subject_name, section, day_of_week, start_time || null, end_time || null, room, instructor_name, year_id || null, semester || 'ภาคต้น'];
 
   db.query(sql, values, (err, result) => {
     if (err) {
@@ -380,7 +393,7 @@ app.put('/subjects/:id', (req, res) => {
     WHERE subject_id = ?
   `;
   
-  const values = [subject_code, subject_name, section, day_of_week, start_time || null, end_time || null, room, instructor_name, year_id || null, semester || 'ภาคต้น' ,id];
+  const values = [subject_code, subject_name, section, day_of_week, start_time || null, end_time || null, room, instructor_name, year_id || null, semester || 'ภาคต้น', id];
 
   db.query(sql, values, (err, result) => {
     if (err) {
@@ -405,23 +418,34 @@ app.delete('/subjects/:id', (req, res) => {
   });
 });
 
+/* =========================================================
+   3. USER SUBJECTS (ตารางเรียนแอปมือถือ - กรองวิชาซ่อนเมื่อหมดภาคเรียน)
+========================================================= */
+
 app.get('/user-subjects', (req, res) => {
   const { email } = req.query;
+
   const sql = `
     SELECT us.id AS enroll_id, s.subject_id, s.subject_code, s.subject_name, 
            s.section, s.day_of_week, 
            COALESCE(us.start_time, s.start_time) AS start_time,
            COALESCE(us.end_time, s.end_time) AS end_time,
            COALESCE(us.room, s.room) AS room,
-           s.instructor_name
+           s.instructor_name, s.semester,
+           ay.academic_year, ay.semester_start_date, ay.semester_end_date
     FROM user_subjects us
     JOIN users u ON us.user_id = u.user_id
     JOIN subjects s ON us.subject_id = s.subject_id
+    JOIN academic_years ay ON s.year_id = ay.year_id 
+                          AND s.semester COLLATE utf8mb4_unicode_ci = ay.semester COLLATE utf8mb4_unicode_ci
     WHERE u.email = ?
+      AND CURRENT_DATE() BETWEEN ay.semester_start_date AND ay.semester_end_date
+    ORDER BY s.day_of_week, start_time
   `;
+
   db.query(sql, [email], (err, results) => {
     if (err) {
-      console.error('❌ ดึงข้อมูลตารางเรียนไม่สำเร็จ:', err);
+      console.error('❌ ดึงข้อมูลตารางเรียนตามเวลาจริงล้มเหลว:', err);
       return res.status(500).json({ error: 'ดึงข้อมูลไม่สำเร็จ' });
     }
     res.json(results);
@@ -435,7 +459,6 @@ app.post('/user-subjects', (req, res) => {
     return res.status(400).json({ error: 'ข้อมูลไม่ครบถ้วน' });
   }
 
-  // 1. ดึงข้อมูลวิชาใหม่ที่กำลังจะเพิ่ม
   const getSubjectSql = `SELECT * FROM subjects WHERE subject_id = ?`;
   db.query(getSubjectSql, [subject_id], (err, targetSubjects) => {
     if (err || targetSubjects.length === 0) {
@@ -444,7 +467,6 @@ app.post('/user-subjects', (req, res) => {
 
     const newSubject = targetSubjects[0];
 
-    // 2. ดึงวิชาเดิมทั้งหมดของผู้ใช้คนนี้มาตรวจ
     const getUserSubjectsSql = `
       SELECT s.subject_id, s.subject_code, s.day_of_week, 
              COALESCE(us.start_time, s.start_time) AS start_time,
@@ -458,16 +480,13 @@ app.post('/user-subjects', (req, res) => {
     db.query(getUserSubjectsSql, [email], (err, existingSubjects) => {
       if (err) return res.status(500).json({ error: 'ตรวจสอบข้อมูลตารางเรียนไม่สำเร็จ' });
 
-      // 2.1 ดักวิชาซ้ำ
       const isDuplicate = existingSubjects.some(item => item.subject_code === newSubject.subject_code);
       if (isDuplicate) {
         return res.status(400).json({ error: 'คุณได้เพิ่มรายวิชานี้เข้าตารางไปแล้ว' });
       }
 
-      // 2.2 ดักเวลาชนกันในวันเดียวกัน (SQL ดึงมาเป็นรูปแบบ HH:mm:ss เปรียบเทียบตรงๆ ใน DB ได้)
       const hasTimeConflict = existingSubjects.some(item => {
         if (item.day_of_week !== newSubject.day_of_week) return false;
-        
         return newSubject.start_time < item.end_time && newSubject.end_time > item.start_time;
       });
 
@@ -475,7 +494,6 @@ app.post('/user-subjects', (req, res) => {
         return res.status(400).json({ error: 'ช่วงเวลาเรียนซ้ำซ้อนกับวิชาที่มีอยู่ในตารางแล้ว' });
       }
 
-      // 3. ผ่านทุกเงื่อนไข บันทึกลงตาราง user_subjects
       const insertSql = `
         INSERT INTO user_subjects (user_id, subject_id) 
         VALUES ((SELECT user_id FROM users WHERE email = ? LIMIT 1), ?)
@@ -519,8 +537,12 @@ app.put('/user-subjects/:id', (req, res) => {
   });
 });
 
+/* =========================================================
+   4. ACADEMIC YEARS API (จัดการปีการศึกษา & ช่วงเวลาภาคเรียน)
+========================================================= */
+
 app.get('/academic-years', (req, res) => {
-  const sql = 'SELECT * FROM academic_years ORDER BY academic_year DESC';
+  const sql = 'SELECT * FROM academic_years ORDER BY academic_year DESC, semester ASC';
   db.query(sql, (err, results) => {
     if (err) {
       console.error('❌ ดึงข้อมูลปีการศึกษาไม่สำเร็จ:', err);
@@ -531,18 +553,22 @@ app.get('/academic-years', (req, res) => {
 });
 
 app.post('/academic-years', (req, res) => {
-  const { academic_year, set_as_current } = req.body;
+  // ✅ เพิ่ม semester เข้ามาดึงค่าจาก req.body
+  const { academic_year, semester, set_as_current, semester_start_date, semester_end_date } = req.body;
 
   if (!academic_year) {
     return res.status(400).json({ error: 'กรุณาระบุปีการศึกษา' });
   }
 
+  const semesterValue = semester || 'ภาคต้น';
+
   const insertYear = () => {
-    const sql = 'INSERT INTO academic_years (academic_year, is_current) VALUES (?, ?)';
-    db.query(sql, [academic_year, set_as_current || false], (err, result) => {
+    // ✅ บันทึกคอลัมน์ semester ลงฐานข้อมูล
+    const sql = 'INSERT INTO academic_years (academic_year, semester, is_current, semester_start_date, semester_end_date) VALUES (?, ?, ?, ?, ?)';
+    db.query(sql, [academic_year, semesterValue, set_as_current || false, semester_start_date || null, semester_end_date || null], (err, result) => {
       if (err) {
         if (err.code === 'ER_DUP_ENTRY') {
-          return res.status(400).json({ error: 'ปีการศึกษานี้มีอยู่ในระบบแล้ว' });
+          return res.status(400).json({ error: 'ปีการศึกษาและภาคการศึกษานี้มีอยู่ในระบบแล้ว' });
         }
         console.error('❌ เพิ่มปีการศึกษาไม่สำเร็จ:', err);
         return res.status(500).json({ error: 'ไม่สามารถเพิ่มปีการศึกษาได้' });
@@ -563,6 +589,46 @@ app.post('/academic-years', (req, res) => {
     insertYear();
   }
 });
+
+app.put('/academic-years/:id', (req, res) => {
+  const { id } = req.params;
+  // ✅ เพิ่ม semester เข้ามาใน PUT ด้วย
+  const { academic_year, semester, is_current, semester_start_date, semester_end_date } = req.body;
+
+  const updateYear = () => {
+    const sql = `
+      UPDATE academic_years 
+      SET academic_year = COALESCE(?, academic_year),
+          semester = COALESCE(?, semester),
+          is_current = COALESCE(?, is_current),
+          semester_start_date = ?, 
+          semester_end_date = ?
+      WHERE year_id = ?
+    `;
+    db.query(sql, [academic_year || null, semester || null, is_current ?? null, semester_start_date || null, semester_end_date || null, id], (err, result) => {
+      if (err) {
+        console.error('❌ แก้ไขปีการศึกษาไม่สำเร็จ:', err);
+        return res.status(500).json({ error: 'ไม่สามารถแก้ไขข้อมูลปีการศึกษาได้' });
+      }
+      res.json({ message: 'อัปเดตข้อมูลปีการศึกษาสำเร็จ' });
+    });
+  };
+
+  if (is_current) {
+    db.query('UPDATE academic_years SET is_current = FALSE', (err) => {
+      if (err) {
+        console.error('❌ อัปเดตปีปัจจุบันไม่สำเร็จ:', err);
+        return res.status(500).json({ error: 'อัปเดตปีการศึกษาล้มเหลว' });
+      }
+      updateYear();
+    });
+  } else {
+    updateYear();
+  }
+});
+/* =========================================================
+   5. CRON JOB FOR PUSH NOTIFICATIONS
+========================================================= */
 
 cron.schedule('* * * * *', () => {
   const currentTime = new Date().toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok' });
